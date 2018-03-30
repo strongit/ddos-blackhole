@@ -61,6 +61,7 @@ $(function() {
   var search = window.location.search;
   if(search) setQueryParams(search.substring(1));
 
+  // charts div 
   $('#charts-acc > div').each(function(idx) {
     $(this).accordion({
       heightStyle:'content',
@@ -74,6 +75,7 @@ $(function() {
     });
   });
 
+  // help div
   $('#help-acc > div').each(function(idx) {
     $(this).accordion({
       heightStyle:'content',
@@ -86,6 +88,7 @@ $(function() {
     });
   });
 
+  // tabs div : crontols settings
   $('#tabs').tabs({
     active: getState('tab', 0),
     activate: function(event, ui) {
@@ -106,8 +109,8 @@ $(function() {
     includeOther:false,
     metric: 'top-5-targets',
     legendHeadings: ['Target IP','Target Group'],
-    hrule:[{name:'threshold',color:'red',scale:showThreshold}],
-    units: 'Packets per Second'},
+    hrule:[{name:'threshold',color:'red',scale:showThreshold}], //警戒线
+    units: 'Bytes per Second'},
   db);
   $('#protocols').chart({
     type: 'topn',
@@ -115,7 +118,7 @@ $(function() {
     includeOther:false,
     metric: 'top-5-protocols',
     legendHeadings: ['Target IP','Protocol Stack'],
-    units: 'Packets per Second'},
+    units: 'Bytes per Second'},
   db);
   $('#attacks').chart({
     type: 'trend',
@@ -245,7 +248,7 @@ $(function() {
     });
   }
 
-  $('#threshold').spinner({min:10000,max:10000000,step:10000});
+  $('#threshold').spinner({min:10000000,max:100000000000,step:10000000});
   $('#thresholdget').button({icons:{primary:'ui-icon-arrowrefresh-1-e'},text:false}).click(getThreshold);
   $('#thresholdset').button({icons:{primary:'ui-icon-arrowstop-1-n'},text:false}).click(setThreshold);
 
@@ -295,10 +298,10 @@ $(function() {
 
   $('#groupsrefresh').button({icons:{primary:'ui-icon-arrowrefresh-1-e'},text:false}).click(refreshGroups);
   $('#groupsget').button({icons:{primary:'ui-icon-search'},text:false}).click(getGroups);
-  $('#groupsfile').hide().change(function(event) {
+  $('#groupsfile').hide().change(function(evt) {
     var input = event.target;
     var reader = new FileReader();
-    var $this = $(this);
+    $this = $(this);
     reader.onload = function(){
       var text = reader.result;
       $this.wrap('<form>').closest('form').get(0).reset();

@@ -6,6 +6,10 @@
 
 include(scriptdir()+'/inc/trend.js');
 
+var trend = new Trend(300,1);
+
+var points;
+
 var router_ip = getSystemProperty("ddos_blackhole.router")   || '127.0.0.1';
 var my_as     = getSystemProperty("ddos_blackhole.as")       || '65000';
 var my_id     = getSystemProperty("ddos_blackhole.id")       || '0.6.6.6';
@@ -28,12 +32,13 @@ var defaultGroups = {
 var filter = 'group:ipsource:ddos_blackhole='+externalGroup;
 filter += '&group:ipdestination:ddos_blackhole!='+excludedGroups;
 
-var groups = storeGet('groups')               || defaultGroups;
-var threshold = storeGet('threshold')         || 1000000;
+var groups = storeGet('groups')               || defaultGroups; //	逻辑运算符&& ||, storeGet(key):Get value from persistent store
+var threshold = storeGet('threshold')         || 100000000;
 var block_minutes = storeGet('block_minutes') || 60;
 
 var controls = {};
 
+// 统计牵引状态节点数
 function updateControlCounts() {
   var counts = { n: 0, blocked: 0, pending: 0, failed: 0};
   for(var addr in controls) {
@@ -98,35 +103,52 @@ bgpAddNeighbor(router_ip, my_as, my_id, null, bgpOpen, bgpClose);
 setGroups('ddos_blackhole', groups);
 
 setFlow('ddos_blackhole_target', 
-  { keys:'ipdestination,group:ipdestination:ddos_blackhole', value:'frames', filter:filter, t:flow_t }
-);
-setFlow('ddos_blackhole_protocol',
-  { keys:'ipdestination,stack', value:'frames', filter:filter, t:flow_t }
+  { keys:'ipdestination,group:ipdestination:ddos_blackhole', value:'bytes', filter:filter, t:flow_t }
 );
 
-function setDDoSThreshold(pps) {
+setFlow('ddos_blackhole_protocol',
+  { keys:'ipdestination,stack', value:'bytes', filter:filter, t:flow_t }
+);
+
+// 设置DDoS阈值
+function setDDoSThreshold(bps) {
   setThreshold('ddos_blackhole_attack',
     {metric:'ddos_blackhole_target',value:threshold,byFlow:true,timeout:10}
   );
-  sharedSet('ddos_blackhole_pps',pps);
+  sharedSet('ddos_blackhole_pps',bps);  // 保存阈值到存储区
 }
 
 setDDoSThreshold(threshold);
 
+
+function in_array(arr, obj) {  
+    var i = arr.length;  
+    while (i--) {  
+        if (arr[i] === obj) {  
+            return true;  
+        }  
+    }  
+    return false;  
+} 
+
 function block(address,info,operator) {
   if(!controls[address]) {
     logInfo("DDoS blocking " + address);
-    let rec = { action: 'block', time: (new Date()).getTime(), status:'pending', info:info };
+	// 当发生牵引时，进行告警
+    // http('http://127.0.0.1:5000/mail/' + address + '/block');
+    // let rec = { action: 'block', time: (new Date()).getTime(), status:'pending', info:info };
+    let rec = { action: 'block', time: (new Date()).getTime(), status:'pending', info:info , times: 0 };
     controls[address] = rec;
     if(enabled || operator) {
       if(bgpAddRoute(router_ip, blockRoute(address))) {
         rec.status = 'blocked';
+        rec.times++;
       }
       else {
         logWarning("DDoS block failed, " + address);
         rec.status = 'failed';
       }
-    }
+	}
   } else if(operator) {
     // operator confirmation of existing control
     let rec = controls[address];
@@ -146,6 +168,8 @@ function block(address,info,operator) {
 function allow(address,info,operator) {
   if(controls[address]) {
     logInfo("DDoS allowing " + address);
+	// 当牵引结束时，进行告警
+    // http('http://127.0.0.1:5000/mail/' + address + '/allow');
     let rec = controls[address];
     if('blocked' === rec.status) {
       if(bgpRemoveRoute(router_ip,address)) {
@@ -162,10 +186,25 @@ function allow(address,info,operator) {
   updateControlCounts();
 }
 
+// function totalTopN(metric,n,minVal,total_bps) {     
+//   var total, top, topN, i, bps, threshold;
+//   top = activeFlows('ALL',metric,n,minVal,'max'); // get top active flows
+//   var topN = {};
+//   if(top) {
+//     total = 0;
+//     for(i in top) {
+//       bps = top[i].value;
+//       topN[top[i].key] = bps;
+//       total += bps;
+//     }
+//   }
+//   logInfo("total rate01 is ", total);
+//   return total;
+// }
+
 setEventHandler(function(evt) {
   var [ip,group] = evt.flowKey.split(',');
   if(controls[ip]) return;
-
   // don't allow data from data sources with sampling rates close to threshold
   // avoids false positives due the insufficient samples
   if(effectiveSamplingRateFlag) {
@@ -173,7 +212,8 @@ setEventHandler(function(evt) {
     if(!dsInfo) return;
     let rate = dsInfo.effectiveSamplingRate;
     if(!rate || rate > (threshold / 10)) {
-      logWarning("DDoS effectiveSampling rate " + rate + " too high for " + evt.agent);
+      // logWarning("DDoS effectiveSampling rate " + rate + " too high for " + evt.agent);
+      logInfo("DDoS effectiveSampling rate " + rate + " too high for " + evt.agent);
       return;
     }
   }
@@ -193,12 +233,25 @@ setEventHandler(function(evt) {
   block(ip,info,false);
 },['ddos_blackhole_attack']);
 
-setIntervalHandler(function(now) {
+// block时检测是否可以allow
+setIntervalHandler(function() {
+  var now = (new Date()).getTime();
   var threshMs = block_minutes * 60000;
+  var total;
+  points = {};
+  threshold = sharedGet('ddos_blackhole_pps');
+  total = sharedGet('ddos_blackhole_connections');
+  logInfo("total top_20 rate is ", total);
   for(var addr in controls) {
+    logInfo("threshMs time is :",threshMs);
     if(now - controls[addr].time > threshMs) allow(addr,{},false);
+    if(!total || total > ((threshold / 10) * 0.8)) {
+      logInfo("DDoS total rate " + total);
+      block(addr,{},false);
+    }
   }
-}, 60);
+  // trend.addPoints(points);
+}, 1);
 
 setHttpHandler(function(req) {
   var result, key, name, path = req.path;
@@ -210,7 +263,9 @@ setHttpHandler(function(req) {
       switch(action) {
         case 'block':
           var address = req.query.address[0];
-          if(address) block(address,{},true);
+          if(address) {
+            block(address,{},true);
+          }
           break;
         case 'allow':
           var address = req.query.address[0];
@@ -244,7 +299,7 @@ setHttpHandler(function(req) {
       switch(req.method) {
         case 'POST':
         case 'PUT':
-          if(req.error) throw "bad_request";
+          if(req.error) throw "bad_request"
           threshold = parseInt(req.body);
           setDDoSThreshold(threshold);
           storeSet('threshold',threshold);
@@ -258,7 +313,7 @@ setHttpHandler(function(req) {
       switch(req.method) {
         case 'POST':
         case 'PUT':
-          if(req.error) throw "bad_request";
+          if(req.error) throw "bad_request"
           block_minutes = parseInt(req.body);
           storeSet('block_minutes',block_minutes);
           break;

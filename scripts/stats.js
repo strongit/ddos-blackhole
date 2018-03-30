@@ -6,26 +6,45 @@
 include(scriptdir()+'/inc/trend.js');
 
 var trend = new Trend(300,1);
+// var effectiveSamplingRateFlag = getSystemProperty("ddos_blackhole.esr") === "yes";
 var points;
 
 var other = '-other-';
-function calculateTopN(metric,n,minVal,total_pps) {     
-  var total, top, topN, i, pps;
-  top = activeFlows('ALL',metric,n,minVal,'max');
+function calculateTopN(metric,n,minVal,total_bps) {     
+  var total, top, topN, i, bps;
+  top = activeFlows('ALL',metric,n,minVal,'max'); // get top active flows
   var topN = {};
   if(top) {
     total = 0;
     for(i in top) {
-      pps = top[i].value;
-      topN[top[i].key] = pps;
-      total += pps;
+      bps = top[i].value;
+      topN[top[i].key] = bps;
+      total += bps;
     }
-    if(total_pps > total) topN[other] = total_pps - total;
+    if(total_bps > total) topN[other] = total_bps - total;
   }
   return topN;
 }
 
-setIntervalHandler(function(now) {
+function totalTopN(metric,n,minVal,total_bps) {     
+  var total, top, topN, i, bps, threshold;
+  top = activeFlows('ALL',metric,n,minVal,'max'); // get top active flows
+  var topN = {};
+  if(top) {
+    total = 0;
+    for(i in top) {
+      bps = top[i].value;
+      topN[top[i].key] = bps;
+      total += bps;
+    }
+  }
+  sharedSet('ddos_blackhole_connections',total);
+  return total;
+}
+
+var controls = {};
+
+setIntervalHandler(function() {
   points = {};
   var counts = sharedGet('ddos_blackhole_controls_counts') || {};
   points['controls'] = counts.n || 0;
@@ -36,7 +55,8 @@ setIntervalHandler(function(now) {
   points['routes'] = sharedGet('ddos_blackhole_routes') || 0;
   points['top-5-targets'] = calculateTopN('ddos_blackhole_target',5,1,0);
   points['top-5-protocols'] = calculateTopN('ddos_blackhole_protocol',5,1,0);
-  trend.addPoints(now,points);  
+  points['total_topn'] = totalTopN('ddos_blackhole_target',20,1,0);
+  trend.addPoints(points);
 }, 1);
 
 setHttpHandler(function(req) {
